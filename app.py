@@ -29,9 +29,13 @@ def extract_text_from_file(uploaded_file):
 
 
 def create_jd_prompt(data):
-    """Creates the AI prompt for JD creation."""
+    """Creates the AI prompt for JD creation without exposing company name."""
+    generic_company_info = f"Our client is a leading organization in the {data['industry']} sector, known for innovation and excellence."
+
     return f"""
-    Create a detailed Job Description based on the following details:
+    Create a professional and detailed Job Description based on the following details.
+    Do not mention any specific company name. Instead, use generic company references.
+    
     Job Title: {data['job_title']}
     Department/Function: {data['department']}
     Industry: {data['industry']}
@@ -40,9 +44,9 @@ def create_jd_prompt(data):
     Must-Have Skills: {data['must_have_skills']}
     Total Experience Required: {data['total_experience']}
     Educational Qualification: {data['education']}
-    Company Name: {data['company_name']}
-    About the Company: {data['about_company']}
-    Provide a professional, well-structured JD.
+    Company Information: {generic_company_info}
+
+    Ensure the JD is well-structured, engaging, and suitable for use in job postings.
     """
 
 
@@ -110,13 +114,10 @@ else:
     must_have_skills = st.text_area("Must-Have Skills*")
     total_experience = st.text_input("Total Experience Required*")
     education = st.text_input("Educational Qualification*")
-    company_name = st.text_input("Company Name*")
-    about_company = st.text_area("About the Company*")
 
     if st.button("🚀 Generate JD"):
         if not all([job_title, department, industry, location, work_setup,
-                    must_have_skills, total_experience, education,
-                    company_name, about_company]):
+                    must_have_skills, total_experience, education]):
             st.error("Please fill all required fields (*) before generating.")
         else:
             with st.spinner("Generating your JD..."):
@@ -128,9 +129,7 @@ else:
                     "work_setup": work_setup,
                     "must_have_skills": must_have_skills,
                     "total_experience": total_experience,
-                    "education": education,
-                    "company_name": company_name,
-                    "about_company": about_company
+                    "education": education
                 }
                 created_jd = call_gemini(api_key, create_jd_prompt(jd_data))
                 st.subheader("📜 Generated Job Description")
