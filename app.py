@@ -2,139 +2,226 @@ import streamlit as st
 import google.generativeai as genai
 import docx
 import PyPDF2
-import io
+import json
 
-# ================================
-# Helper Functions
-# ================================
+# ---------- Helpers ----------
+def extract_text_from_file(f):
+    t = f.type
+    if t == "application/pdf":
+        r = PyPDF2.PdfReader(f)
+        return "\n".join([p.extract_text() for p in r.pages if p.extract_text()])
+    elif t in ("application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+               "application/msword"):
+        d = docx.Document(f)
+        return "\n".join(p.text for p in d.paragraphs)
+    elif t.startswith("text/"):
+        return f.read().decode("utf-8")
+    return None
 
-def extract_text_from_file(uploaded_file):
-    """Extracts text from PDF, DOCX, or TXT file."""
-    file_type = uploaded_file.type
+def call_gemini(key, prompt, model="gemini-1.5-flash"):
+    genai.configure(api_key=key)
+    llm = genai.GenerativeModel(model)
+    resp = llm.generate_content(prompt)
+    return resp.text if hasattr(resp,"text") else str(resp)
 
-    if file_type == "application/pdf":
-        reader = PyPDF2.PdfReader(uploaded_file)
-        return "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
-
-    elif file_type in ["application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                       "application/msword"]:
-        doc = docx.Document(uploaded_file)
-        return "\n".join([para.text for para in doc.paragraphs])
-
-    elif file_type.startswith("text/"):
-        return uploaded_file.read().decode("utf-8")
-
-    else:
-        return None
-
-
-def create_jd_prompt(data):
-    """Creates the AI prompt for JD creation without exposing company name."""
-    generic_company_info = f"Our client is a leading organization in the {data['industry']} sector, known for innovation and excellence."
-
+# ---------- JD prompts ----------
+def build_create_prompt(data):
+    generic = f"Our client is a leading organisation in the {data['industry']} sector."
     return f"""
-    Create a professional and detailed Job Description based on the following details.
-    Do not mention any specific company name. Instead, use generic company references.
-    
-    Job Title: {data['job_title']}
-    Department/Function: {data['department']}
-    Industry: {data['industry']}
-    Location: {data['location']}
-    Work Setup: {data['work_setup']}
-    Must-Have Skills: {data['must_have_skills']}
-    Total Experience Required: {data['total_experience']}
-    Educational Qualification: {data['education']}
-    Company Information: {generic_company_info}
+Create a professional Job Description using the details below.
+Do NOT mention real company names – use generic references only.
 
-    Ensure the JD is well-structured, engaging, and suitable for use in job postings.
-    """
+Job Title: {data['job_title']}
+Department: {data['department']}
+Industry: {data['industry']}
+Location: {data['location']}
+Work Setup: {data['work_setup']}
+Must-Have Skills: {data['must_have_skills']}
+Total Experience: {data['total_experience']}
+Educational Qualification: {data['education']}
+Company Info: {generic}
 
+Return the full JD in plain text.
+"""
 
-def refine_jd_prompt(jd_text):
-    """Creates the AI prompt for JD refinement."""
+def build_parse_prompt(jd_text):
     return f"""
-    Refine and structure the following Job Description.
-    Add missing key responsibilities, deliverables, KPIs, and any relevant details.
+You are an expert recruiter assistant.
 
-    Job Description to refine:
-    {jd_text}
-    """
+Parse the following job description and output a JSON dictionary with **exactly** these 3 keys:
 
+1. "search_criteria" — object with:
+   "boolean_string" (string),
+   "mandatory" (array of strings),
+   "preferred" (array of strings)
 
-def call_gemini(api_key, prompt):
-    """Calls the Gemini API with the given prompt."""
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    response = model.generate_content(prompt)
-    return response.text if hasattr(response, "text") else str(response)
+2. "screening_questions" — object with:
+   "domain_expertise" (array of objects {{question, answer}}),
+   "product_tech" (array of objects {{question, answer}}),
+   "cross_functional" (array of objects {{question, answer}}),
+   "fitment" (array of objects {{question, answer}})
 
+3. "source_mapping" — object with:
+   "companies" (array of strings),
+   "roles" (array of strings),
+   "linkedin_filters" (object {{title, skills, location, experience}})
 
-# ================================
-# Streamlit UI
-# ================================
+⚠️ IMPORTANT:
+Return **valid JSON ONLY**. No markdown, no commentary, no backticks.
+If a value is missing, output an empty array or empty string.
 
-st.set_page_config(page_title="Recruiter AI - JD Creator & Refiner", page_icon="🤖", layout="wide")
-st.title("🤖 Recruiter AI – JD Creator & Refiner")
+JD:
+{jd_text}
+"""
 
-# Step 1: Ask for API Key
-api_key = st.text_input("🔑 Enter your Gemini API Key:", type="password")
+# ---------- Streamlit ----------
+st.set_page_config("Recruiter AI", layout="wide")
+st.title("🤖 Recruiter AI — JD Creation & Parsing")
+
+api_key = st.text_input("Enter your Gemini API Key:", type="password")
 if not api_key:
-    st.warning("Please enter your Gemini API Key to proceed.")
     st.stop()
 
-# Step 2: Ask if they have a JD
-have_jd = st.radio("📄 Do you already have a Job Description?", ["Yes", "No"])
+choice = st.radio("Do you already have a Job Description?", ["No (Create one)", "Yes (Parse existing)"])
 
-# ================================
-# If user has a JD → Refinement flow
-# ================================
-if have_jd == "Yes":
-    uploaded_file = st.file_uploader("📤 Upload your JD file (PDF, DOCX, TXT)", type=["pdf", "docx", "txt"])
-    if uploaded_file:
-        jd_text = extract_text_from_file(uploaded_file)
-        if jd_text:
-            if st.button("✨ Refine JD"):
-                with st.spinner("Refining your JD..."):
-                    refined_jd = call_gemini(api_key, refine_jd_prompt(jd_text))
-                    st.subheader("📜 Refined Job Description")
-                    st.write(refined_jd)
-        else:
-            st.error("Could not extract text from the uploaded file.")
-
-# ================================
-# If user does not have a JD → Creation flow
-# ================================
-else:
-    st.subheader("📝 Fill in the essential details to create a JD")
-    job_title = st.text_input("Job Title*")
-    department = st.text_input("Department / Function*")
-    industry = st.text_input("Industry*")
-    location = st.text_input("Location*")
-    work_setup = st.selectbox("Work Setup*", ["Remote", "Hybrid", "Onsite"])
-    must_have_skills = st.text_area("Must-Have Skills*")
-    total_experience = st.text_input("Total Experience Required*")
-    education = st.text_input("Educational Qualification*")
+# =========== CREATE ============
+if choice.startswith("No"):
+    st.subheader("📝 Fill details to generate a Job Description")
+    col1, col2 = st.columns(2)
+    job_title   = col1.text_input("Job Title*")
+    department  = col2.text_input("Department / Function*")
+    industry    = col1.text_input("Industry*")
+    location    = col2.text_input("Location*")
+    work_setup  = col1.selectbox("Work Setup*", ["Remote","Hybrid","Onsite"])
+    must_have   = col2.text_area("Must-Have Skills*")
+    exp         = col1.text_input("Total Experience Required*")
+    edu         = col2.text_input("Educational Qualification*")
 
     if st.button("🚀 Generate JD"):
-        if not all([job_title, department, industry, location, work_setup,
-                    must_have_skills, total_experience, education]):
-            st.error("Please fill all required fields (*) before generating.")
+        if not all([job_title,department,industry,location,work_setup,must_have,exp,edu]):
+            st.error("All fields marked * are required.")
         else:
-            with st.spinner("Generating your JD..."):
-                jd_data = {
-                    "job_title": job_title,
-                    "department": department,
-                    "industry": industry,
-                    "location": location,
-                    "work_setup": work_setup,
-                    "must_have_skills": must_have_skills,
-                    "total_experience": total_experience,
-                    "education": education
+            with st.spinner("Generating JD..."):
+                data = {
+                  "job_title":job_title,"department":department,"industry":industry,
+                  "location":location,"work_setup":work_setup,
+                  "must_have_skills":must_have,"total_experience":exp,"education":edu
                 }
-                created_jd = call_gemini(api_key, create_jd_prompt(jd_data))
-                st.subheader("📜 Generated Job Description")
-                st.write(created_jd)
+                jd = call_gemini(api_key, build_create_prompt(data))
+                st.session_state.generated_jd = jd
+                st.success("✅ Job Description created!")
 
-                st.subheader("✨ Refined Version")
-                refined_jd = call_gemini(api_key, refine_jd_prompt(created_jd))
-                st.write(refined_jd)
+    if "generated_jd" in st.session_state:
+        st.markdown("### 📄 Generated JD")
+        st.text_area("JD Preview", st.session_state.generated_jd, height=300)
+        if st.button("📥 Parse This JD"):
+            st.session_state.to_parse = st.session_state.generated_jd
+            st.rerun()
+
+# =========== PARSE ============
+else:
+    st.subheader("📤 Upload and Parse an existing JD")
+    file = st.file_uploader("Upload PDF/DOCX/TXT", type=["pdf","docx","txt"])
+    if file:
+        text = extract_text_from_file(file)
+        if text and st.button("🔍 Parse JD"):
+            st.session_state.to_parse = text
+            st.rerun()
+
+# ========= When user wants to parse =========
+if "to_parse" in st.session_state:
+    prompt = build_parse_prompt(st.session_state.to_parse)
+    st.session_state.last_prompt = prompt
+
+    with st.spinner("Parsing JD..."):
+        raw = call_gemini(api_key, prompt)
+
+    # try parse JSON
+    try:
+        parsed = json.loads(raw)
+        st.session_state.parsed_sections = parsed
+        st.success("Parsed ✅")
+    except Exception:
+        st.error("❌ Model did not return valid JSON.")
+        if st.button("🔁 Try Again"):
+            raw_retry = call_gemini(api_key, st.session_state.last_prompt)
+            try:
+                parsed = json.loads(raw_retry)
+                st.session_state.parsed_sections = parsed
+                st.rerun()
+            except:
+                st.error("Still not valid. Try again.")
+        st.stop()
+
+# ====== Display & Download Sections ======
+if "parsed_sections" in st.session_state:
+    data = st.session_state.parsed_sections
+    st.subheader("✅ Parsed Sections")
+    st.json(data)
+
+    # ---------------------------------------------
+    # Helper to build PDF in-memory and return bytes
+    # ---------------------------------------------
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+    import io
+
+    def build_pdf(title, content_str):
+        buf = io.BytesIO()
+        c = canvas.Canvas(buf, pagesize=letter)
+        textobject = c.beginText(40, 750)
+        textobject.setFont("Helvetica", 10)
+        textobject.textLine(title)
+        textobject.textLine("-" * len(title))
+        for line in content_str.split("\n"):
+            textobject.textLine(line)
+        c.drawText(textobject)
+        c.showPage()
+        c.save()
+        buf.seek(0)
+        return buf.getvalue()
+
+    # ---------------------------------------------
+    # Build + Download buttons
+    # ---------------------------------------------
+    # 1) Search Criteria
+    sc = data['search_criteria']
+    sc_text = f"Boolean String: {sc['boolean_string']}\n\nMandatory:\n" + \
+              "\n".join(sc['mandatory']) + \
+              "\n\nPreferred:\n" + "\n".join(sc['preferred'])
+
+    # 2) Screening Questions
+    sq = data['screening_questions']
+    sq_lines = []
+    for key, arr in sq.items():
+        sq_lines.append(f"\n*** {key.replace('_',' ').title()} ***")
+        for qa in arr:
+            sq_lines.append(f"Q: {qa['question']}")
+            sq_lines.append(f"A: {qa['answer']}")
+    sq_text = "\n".join(sq_lines)
+
+    # 3) Source Mapping
+    sm = data['source_mapping']
+    sm_text = "Companies:\n" + "\n".join(sm['companies']) + \
+              "\n\nRoles:\n" + "\n".join(sm['roles']) + \
+              "\n\nLinkedIn Filters:\n" + \
+              f"Title: {sm['linkedin_filters']['title']}\n" + \
+              f"Skills: {', '.join(sm['linkedin_filters']['skills'])}\n" + \
+              f"Location: {sm['linkedin_filters']['location']}\n" + \
+              f"Experience: {sm['linkedin_filters']['experience']}"
+
+    # Buttons
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("📄 Download Search Criteria (PDF)"):
+            pdf_bytes = build_pdf("Search Criteria", sc_text)
+            st.download_button("⬇️ Save PDF", pdf_bytes, file_name="search_criteria.pdf")
+    with col2:
+        if st.button("📄 Download Screening Questions (PDF)"):
+            pdf_bytes = build_pdf("Screening Questions", sq_text)
+            st.download_button("⬇️ Save PDF", pdf_bytes, file_name="screening_questions.pdf")
+    with col3:
+        if st.button("📄 Download Source Mapping (PDF)"):
+            pdf_bytes = build_pdf("Source Mapping", sm_text)
+            st.download_button("⬇️ Save PDF", pdf_bytes, file_name="source_mapping.pdf")
+

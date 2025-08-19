@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>JD Form</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f9f9f9;
+        }
+        label {
+            font-weight: bold;
+            display: block;
+            margin-top: 10px;
+        }
+        select, textarea, input, button {
+            width: 100%;
+            padding: 8px;
+            margin-top: 5px;
+            margin-bottom: 15px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #45a049;
+        }
+    </style>
+</head>
+<body>
+
+<h2>Job Description Form</h2>
+
+<form id="jdForm">
+    <label for="hasJD">Do you have a JD?</label>
+    <select name="hasJD" id="hasJD">
+        <option value="YES">YES</option>
+        <option value="NO">NO</option>
+    </select>
+
+    <div id="jdSection">
+        <label for="jobDescription">Paste Job Description:</label>
+        <textarea name="jobDescription" id="jobDescription" rows="5"></textarea>
+    </div>
+
+    <div id="noJDSection" style="display:none;">
+        <label>Role:</label>
+        <input type="text" id="role" name="role">
+        
+        <label>Qualifications:</label>
+        <input type="text" id="qualifications" name="qualifications">
+        
+        <label>Responsibilities:</label>
+        <textarea id="responsibilities" name="responsibilities" rows="3"></textarea>
+    </div>
+
+    <button type="submit">Submit</button>
+</form>
+
+<p id="result"></p>
+
+<script>
+const webhookURL = "https://suhana-832-attar.app.n8n.cloud/webhook-test/1963e9d3-dcc7-40a2-bccb-b076bf21095b";
+
+const hasJDSelect = document.getElementById("hasJD");
+const jdSection = document.getElementById("jdSection");
+const noJDSection = document.getElementById("noJDSection");
+
+hasJDSelect.addEventListener("change", function() {
+    if (this.value === "YES") {
+        jdSection.style.display = "block";
+        noJDSection.style.display = "none";
+    } else {
+        jdSection.style.display = "none";
+        noJDSection.style.display = "block";
+    }
+});
+
+document.getElementById("jdForm").addEventListener("submit", async function(event) {
+    event.preventDefault();
+
+    let payload = {
+        hasJD: document.getElementById("hasJD").value
+    };
+
+    if (payload.hasJD === "YES") {
+        payload.jobDescription = document.getElementById("jobDescription").value;
+    } else {
+        payload.role = document.getElementById("role").value;
+        payload.qualifications = document.getElementById("qualifications").value;
+        payload.responsibilities = document.getElementById("responsibilities").value;
+    }
+
+    try {
+        let res = await fetch(webhookURL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify(payload)
+        });
+        let data = await res.json();
+        document.getElementById("result").innerText = "✅ Response: " + JSON.stringify(data);
+    } catch (error) {
+        document.getElementById("result").innerText = "❌ Error: " + error;
+    }
+});
+</script>
+
+</body>
+</html>
